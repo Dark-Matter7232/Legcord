@@ -4,7 +4,7 @@ import { BackupSection } from "../components/BackupSection.jsx";
 import { DropdownItem } from "../components/DropdownItem.jsx";
 import { SupportBanner } from "../components/SupportBanner.jsx";
 import { TextBoxItem } from "../components/TextBoxItem.jsx";
-import { setConfig, toggleMod } from "../settings.js";
+import { setConfig, toggleMod, isMinWindowsVersion } from "../settings.js";
 import classes from "./SettingsPage.module.css";
 
 const {
@@ -90,6 +90,15 @@ export function SettingsPage() {
                     { label: store.i18n["settings-theme-legacy"], value: "legacy" },
                 ]}
             />
+            <Show when={settings.windowStyle === "native"}>
+                <SwitchItem
+                    note={store.i18n["settings-autoHideMenuBar-desc"]}
+                    value={settings.autoHideMenuBar}
+                    onChange={(e: boolean) => setConfig("autoHideMenuBar", e, true)}
+                >
+                    {store.i18n["settings-autoHideMenuBar"]}
+                </SwitchItem>
+            </Show>
             <DropdownItem
                 value={store.settings.transparency}
                 onChange={(v) => setConfig("transparency", v as Settings["transparency"], true)}
@@ -132,14 +141,26 @@ export function SettingsPage() {
                     { label: store.i18n["settings-none"], value: "none" },
                 ]}
             />
-            <Show when={settings.windowStyle === "native"}>
-                <SwitchItem
-                    note={store.i18n["settings-autoHideMenuBar-desc"]}
-                    value={settings.autoHideMenuBar}
-                    onChange={(e: boolean) => setConfig("autoHideMenuBar", e, true)}
-                >
-                    {store.i18n["settings-autoHideMenuBar"]}
-                </SwitchItem>
+            <Show
+                when={
+                    window.legcord.platform === "win32" &&
+                    isMinWindowsVersion(10, 0, 22000) &&
+                    store.settings.transparency == "modern"
+                }
+            >
+                <DropdownItem
+                    value={settings.windowMaterial}
+                    onChange={(v) => setConfig("windowMaterial", v as Settings["windowMaterial"], true)}
+                    title={store.i18n["settings-material"]}
+                    note={store.i18n["settings-material-desc"]}
+                    link="https://github.com/Legcord/Legcord/wiki/Settings-%5Bwip%5D#legcord-theme"
+                    options={[
+                        { label: store.i18n["settings-material-mica"], value: "mica" },
+                        { label: store.i18n["settings-material-mica-alt"], value: "tabbed" },
+                        { label: store.i18n["settings-material-acrylic"], value: "acrylic" },
+                        { label: store.i18n["settings-material-none"], value: "none" },
+                    ]}
+                />
             </Show>
             <Show when={window.legcord.platform === "darwin"}>
                 <SwitchItem
