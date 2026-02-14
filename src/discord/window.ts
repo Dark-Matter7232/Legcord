@@ -57,6 +57,33 @@ function getDownloadUrl(item: DownloadItem): string {
     return chain.at(-1) ?? item.getURL();
 }
 
+async function buildGopeedRequestHeaders(passedWindow: BrowserWindow, url: string): Promise<Record<string, string>> {
+    const headers: Record<string, string> = {};
+
+    const userAgent = passedWindow.webContents.userAgent;
+    if (typeof userAgent === "string" && userAgent.length > 0) {
+        headers["User-Agent"] = userAgent;
+    }
+
+    const currentUrl = passedWindow.webContents.getURL();
+    if (isHttpUrl(currentUrl)) {
+        headers.Referer = currentUrl;
+    }
+
+    try {
+        const cookies = await passedWindow.webContents.session.cookies.get({ url });
+        if (cookies.length > 0) {
+            headers.Cookie = cookies
+                .map((cookie: { name: string; value: string }) => `${cookie.name}=${cookie.value}`)
+                .join("; ");
+        }
+    } catch {
+        // best-effort header collection
+    }
+
+    return headers;
+}
+
 function getGopeedDebugConfigSummary(): string {
     const gopeed = getConfig("gopeed") as { enabled?: unknown; host?: unknown; token?: unknown } | undefined;
     const host = typeof gopeed?.host === "string" ? gopeed.host : "<unset>";
@@ -122,20 +149,28 @@ function registerGopeedHandler(passedWindow: BrowserWindow): void {
         event.preventDefault();
         item.cancel();
 
-        void createGopeedTask(sourceUrl, {
-            filename: item.getFilename(),
-        })
-            .then((taskId) => {
+        void (async () => {
+            try {
+                const headers = await buildGopeedRequestHeaders(passedWindow, sourceUrl);
+                logGopeedDebug(
+                    `[Gopeed][debug] will-download context headers: hasUA=${String(Boolean(headers["User-Agent"]))} hasReferer=${String(Boolean(headers.Referer))} hasCookie=${String(Boolean(headers.Cookie))}`,
+                );
+                const taskId = await createGopeedTask(sourceUrl, {
+                    filename: item.getFilename(),
+                    headers,
+                });
                 logGopeedDebug(`[Gopeed] Queued download in Gopeed (task: ${taskId}) from ${sourceUrl}`);
-            })
-            .catch((error: unknown) => {
+            } catch (error: unknown) {
                 logMainError("[Gopeed] Failed to queue download in Gopeed, falling back to built-in downloader:", error);
                 gopeedBypassUrls.add(sourceUrl);
                 logGopeedDebug(`[Gopeed][debug] will-download fallback: retrying built-in downloader for ${sourceUrl}`);
                 if (!webContents.isDestroyed()) {
                     webContents.downloadURL(sourceUrl);
                 }
-            });
+            }
+        })();
+
+        return;
     });
 }
 
@@ -309,14 +344,19 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
             routeDecision.shouldRoute
         ) {
             logGopeedDebug(`[Gopeed][debug] window-open routed to Gopeed (${routeDecision.reason}): ${url}`);
-            void createGopeedTask(url)
-                .then((taskId) => {
+            void (async () => {
+                try {
+                    const headers = await buildGopeedRequestHeaders(passedWindow, url);
+                    logGopeedDebug(
+                        `[Gopeed][debug] window-open context headers: hasUA=${String(Boolean(headers["User-Agent"]))} hasReferer=${String(Boolean(headers.Referer))} hasCookie=${String(Boolean(headers.Cookie))}`,
+                    );
+                    const taskId = await createGopeedTask(url, { headers });
                     logGopeedDebug(`[Gopeed] Queued external download link (task: ${taskId}) from ${url}`);
-                })
-                .catch((error: unknown) => {
+                } catch (error: unknown) {
                     logMainError("[Gopeed] Failed to queue external download link, opening in browser:", error);
                     openExternalWithReason(url, "window-open-gopeed-error");
-                });
+                }
+            })();
         } else if (isHttpOrHttps && isGopeedEnabled() && !routeDecision.shouldRoute) {
             logGopeedDebug(
                 `[Gopeed][debug] window-open not routed to Gopeed (${routeDecision.reason}), opening externally: ${url}`,
@@ -381,14 +421,19 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
 
         logGopeedDebug(`[Gopeed][debug] will-navigate routed to Gopeed (${routeDecision.reason}): ${url}`);
         event.preventDefault();
-        void createGopeedTask(url)
-            .then((taskId) => {
+        void (async () => {
+            try {
+                const headers = await buildGopeedRequestHeaders(passedWindow, url);
+                logGopeedDebug(
+                    `[Gopeed][debug] will-navigate context headers: hasUA=${String(Boolean(headers["User-Agent"]))} hasReferer=${String(Boolean(headers.Referer))} hasCookie=${String(Boolean(headers.Cookie))}`,
+                );
+                const taskId = await createGopeedTask(url, { headers });
                 logGopeedDebug(`[Gopeed] Queued same-window download link (task: ${taskId}) from ${url}`);
-            })
-            .catch((error: unknown) => {
+            } catch (error: unknown) {
                 logMainError("[Gopeed] Failed to queue same-window download link, opening in browser:", error);
                 openExternalWithReason(url, "will-navigate-gopeed-error");
-            });
+            }
+        })();
     });
 
     passedWindow.webContents.session.setSpellCheckerLanguages(getConfig("spellcheckLanguage"));
@@ -428,10 +473,23 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
                 `[Gopeed][debug] webRequest onBeforeRequest: method=${details.method} resourceType=${details.resourceType} url=${details.url}`,
             );
         }
+
+        if (details.url.includes("ws://127.0.0.1:")) {
+            return callback({ cancel: true });
+        }
+
+        if (blockedPatterns.some((pattern) => pattern.test(details.url))) {
+            return callback({ cancel: true });
+        }
+
         return callback({});
     });
 
     passedWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+        if (details.url.startsWith("https://www.youtube.com/embed/")) {
+            details.requestHeaders.Referer = "https://google.com";
+        }
+
         if (isLikelyDownloadTelemetryUrl(details.url)) {
             const hasReferer = typeof details.requestHeaders.Referer === "string" && details.requestHeaders.Referer.length > 0;
             const hasUserAgent =
@@ -440,6 +498,7 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
                 `[Gopeed][debug] webRequest onBeforeSendHeaders: hasReferer=${String(hasReferer)} hasUserAgent=${String(hasUserAgent)} url=${details.url}`,
             );
         }
+
         callback({ requestHeaders: details.requestHeaders });
     });
 
@@ -457,21 +516,7 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
         }
     });
 
-    passedWindow.webContents.session.webRequest.onBeforeRequest((details, callback) => {
-        if (blockedPatterns.some((pattern) => pattern.test(details.url))) {
-            return callback({ cancel: true });
-        }
-        return callback({});
-    });
-
-    // fix UMG video playback
-    passedWindow.webContents.session.webRequest.onBeforeSendHeaders(
-        { urls: ["https://www.youtube.com/embed/*"] },
-        ({ requestHeaders }, callback) => {
-            requestHeaders.Referer = "https://google.com";
-            callback({ requestHeaders });
-        },
-    );
+    // fix UMG video playback handled in unified onBeforeSendHeaders above
     if (getConfig("tray") === "dynamic") {
         passedWindow.webContents.on("page-favicon-updated", (_, favicons) => {
             try {
@@ -569,10 +614,6 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
             y: passedWindow.getPosition()[1],
         });
         setForceQuit(true);
-    });
-    passedWindow.webContents.session.webRequest.onBeforeRequest((details, callback) => {
-        if (details.url.includes("ws://127.0.0.1:")) return callback({ cancel: true });
-        return callback({});
     });
     passedWindow.on("focus", () => {
         void passedWindow.webContents.executeJavaScript(`document.body.removeAttribute("unFocused");`);

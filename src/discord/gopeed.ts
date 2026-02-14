@@ -10,6 +10,8 @@ interface GopeedApiResult<T> {
 
 interface CreateGopeedTaskOptions {
     filename?: string;
+    headers?: Record<string, string>;
+    method?: "GET" | "POST";
 }
 
 function normalizeHost(host: unknown): string {
@@ -44,16 +46,26 @@ export async function createGopeedTask(url: string, options: CreateGopeedTaskOpt
         `[Gopeed][debug] createGopeedTask request: url=${url} filename=${options.filename ?? "<none>"} host=${host} tokenSet=${token.length > 0}`,
     );
 
+    const extra: { header?: Record<string, string>; method?: "GET" | "POST" } = {};
+    if (options.headers && Object.keys(options.headers).length > 0) {
+        extra.header = options.headers;
+    }
+    if (options.method) {
+        extra.method = options.method;
+    }
+
+    const reqPayload = Object.keys(extra).length > 0 ? { url, extra } : { url };
+
     const payload: {
-        req: { url: string };
+        req: { url: string; extra?: { header?: Record<string, string>; method?: "GET" | "POST" } };
         opts?: { name?: string };
     } = options.filename
         ? {
-              req: { url },
+              req: reqPayload,
               opts: { name: options.filename },
           }
         : {
-              req: { url },
+              req: reqPayload,
           };
 
     const payloadText = JSON.stringify(payload);
