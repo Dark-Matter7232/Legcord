@@ -59,6 +59,7 @@
         "electron-context-menu": "^4.0.4",
         "electron-is-dev": "^3.0.1",
         "electron-updater": "^6.6.2",
+        "node-ole": "^1.2.2",
         "ws": "^8.18.0"
     },
     "optionalDependencies": {
