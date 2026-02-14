@@ -1,10 +1,14 @@
 import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Buffer } from "node:buffer";
 import {
     BrowserWindow,
     type BrowserWindowConstructorOptions,
+    type DownloadItem,
     type MessageBoxOptions,
+    type Session,
+    type WebContents,
     app,
     dialog,
     nativeImage,
@@ -19,6 +23,7 @@ import { initQuickCss, injectThemesMain } from "../common/themes.js";
 import { getWindowState, setWindowState } from "../common/windowState.js";
 import { init } from "../main.js";
 import { registerGlobalKeybinds } from "./globalKeybinds.js";
+import { createGopeedTask, normalizeGopeedHost } from "./gopeed.js";
 import { registerIpc } from "./ipc.js";
 import { setMenu } from "./menu.js";
 import { startRPC, stopRPC } from "./rpcProcess.js";
@@ -28,6 +33,256 @@ import { createTray, tray } from "./tray.js";
 import { registerVenmicIpc } from "./venmic.js";
 export let mainWindows: BrowserWindow[] = [];
 export let inviteWindow: BrowserWindow;
+let gopeedHandlerRegistered = false;
+const gopeedBypassUrls = new Set<string>();
+const GOPEED_BYPASS_URLS_MAX = 256;
+const GOPEED_ROUTE_CACHE_MAX = 512;
+const gopeedRouteCache = new Map<string, boolean>();
+const DISCORD_DOWNLOAD_HOSTS = new Set(["cdn.discordapp.com", "cdn.discordapp.net", "media.discordapp.net"]);
+const DOWNLOAD_FILENAME_QUERY_KEYS = ["filename", "file", "name"];
+
+function isHttpUrl(url: string): boolean {
+    const lowerUrl = url.toLowerCase();
+    return lowerUrl.startsWith("http://") || lowerUrl.startsWith("https://");
+}
+
+function isGopeedEnabled(): boolean {
+    const gopeed = getConfig("gopeed") as { enabled?: unknown } | undefined;
+    return gopeed?.enabled === true;
+}
+
+function getDownloadUrl(item: DownloadItem): string {
+    const chain = item.getURLChain();
+    return chain.at(-1) ?? item.getURL();
+}
+
+function getRelevantQueryFilename(searchParams: URLSearchParams): string {
+    for (const key of DOWNLOAD_FILENAME_QUERY_KEYS) {
+        const value = searchParams.get(key);
+        if (value) {
+            return value;
+        }
+    }
+    return "";
+}
+
+function bringGopeedToFront(): void {
+    void shell.openExternal("gopeed://").catch(() => undefined);
+}
+
+function rememberGopeedBypassUrl(url: string): void {
+    if (gopeedBypassUrls.has(url)) {
+        gopeedBypassUrls.delete(url);
+    }
+    gopeedBypassUrls.add(url);
+    if (gopeedBypassUrls.size > GOPEED_BYPASS_URLS_MAX) {
+        const oldest = gopeedBypassUrls.values().next().value;
+        if (oldest) {
+            gopeedBypassUrls.delete(oldest);
+        }
+    }
+}
+
+function getCachedGopeedRouteDecision(url: string): boolean {
+    const cached = gopeedRouteCache.get(url);
+    if (cached !== undefined) {
+        gopeedRouteCache.delete(url);
+        gopeedRouteCache.set(url, cached);
+        return cached;
+    }
+
+    const shouldRoute = computeGopeedRouteDecision(url);
+    gopeedRouteCache.set(url, shouldRoute);
+    if (gopeedRouteCache.size > GOPEED_ROUTE_CACHE_MAX) {
+        const oldest = gopeedRouteCache.keys().next().value;
+        if (oldest) {
+            gopeedRouteCache.delete(oldest);
+        }
+    }
+
+    return shouldRoute;
+}
+
+function canUseGopeedDeepLink(): boolean {
+    const gopeed = getConfig("gopeed") as { host?: unknown } | undefined;
+    try {
+        const host = normalizeGopeedHost(gopeed?.host);
+        const parsed = new URL(host);
+        const hostname = parsed.hostname.toLowerCase();
+        return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]";
+    } catch {
+        return false;
+    }
+}
+
+function buildGopeedCreateDeepLink(url: string, headers: Record<string, string>, filename?: string): string {
+    const req =
+        Object.keys(headers).length > 0
+            ? {
+                  url,
+                  extra: {
+                      header: headers,
+                  },
+              }
+            : {
+                  url,
+              };
+
+    const payload = filename
+        ? {
+              req,
+              opts: {
+                  name: filename,
+              },
+          }
+        : {
+              req,
+          };
+
+    const encodedParams = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+    return `gopeed:///create?params=${encodeURIComponent(encodedParams)}`;
+}
+
+async function queueGopeedDownload(passedWindow: BrowserWindow, url: string, filename?: string): Promise<boolean> {
+    const headers = await buildGopeedRequestHeaders(passedWindow, url);
+    if (canUseGopeedDeepLink()) {
+        try {
+            const deepLink = buildGopeedCreateDeepLink(url, headers, filename);
+            await shell.openExternal(deepLink);
+            return true;
+        } catch {
+            // fallback to REST API path below
+        }
+    }
+
+    const taskOptions = filename
+        ? {
+              filename,
+              headers,
+          }
+        : {
+              headers,
+          };
+    await createGopeedTask(url, taskOptions);
+    bringGopeedToFront();
+    return true;
+}
+
+async function buildGopeedRequestHeaders(passedWindow: BrowserWindow, url: string): Promise<Record<string, string>> {
+    const headers: Record<string, string> = {};
+
+    const userAgent = passedWindow.webContents.userAgent;
+    if (typeof userAgent === "string" && userAgent.length > 0) {
+        headers["User-Agent"] = userAgent;
+    }
+
+    const currentUrl = passedWindow.webContents.getURL();
+    if (isHttpUrl(currentUrl)) {
+        headers.Referer = currentUrl;
+    }
+
+    try {
+        const cookies = await passedWindow.webContents.session.cookies.get({ url });
+        if (cookies.length > 0) {
+            headers.Cookie = cookies
+                .map((cookie: { name: string; value: string }) => `${cookie.name}=${cookie.value}`)
+                .join("; ");
+        }
+    } catch {
+        // best-effort header collection
+    }
+
+    return headers;
+}
+
+function pickGopeedWindow(webContents: WebContents): BrowserWindow | null {
+    const ownerWindow = BrowserWindow.fromWebContents(webContents);
+    if (ownerWindow && !ownerWindow.isDestroyed()) {
+        return ownerWindow;
+    }
+
+    const focusedWindow = BrowserWindow.getFocusedWindow();
+    if (focusedWindow && !focusedWindow.isDestroyed()) {
+        return focusedWindow;
+    }
+
+    return mainWindows.find((window) => !window.isDestroyed()) ?? null;
+}
+
+function registerGopeedHandler(session: Session): void {
+    if (gopeedHandlerRegistered) {
+        return;
+    }
+
+    gopeedHandlerRegistered = true;
+    session.on("will-download", (event, item, webContents) => {
+        const sourceUrl = getDownloadUrl(item);
+        if (!sourceUrl) {
+            return;
+        }
+
+        if (gopeedBypassUrls.has(sourceUrl)) {
+            gopeedBypassUrls.delete(sourceUrl);
+            return;
+        }
+
+        if (!isGopeedEnabled()) {
+            return;
+        }
+
+        if (!isHttpUrl(sourceUrl)) {
+            return;
+        }
+
+        event.preventDefault();
+        item.cancel();
+
+        void (async () => {
+            try {
+                const targetWindow = pickGopeedWindow(webContents);
+                if (!targetWindow) {
+                    throw new Error("No available BrowserWindow for Gopeed routing");
+                }
+
+                const queued = await queueGopeedDownload(targetWindow, sourceUrl, item.getFilename());
+                if (!queued) {
+                    return;
+                }
+            } catch {
+                rememberGopeedBypassUrl(sourceUrl);
+                if (!webContents.isDestroyed()) {
+                    webContents.downloadURL(sourceUrl);
+                }
+            }
+        })();
+
+        return;
+    });
+}
+
+function computeGopeedRouteDecision(url: string): boolean {
+    try {
+        const parsed = new URL(url);
+        const hostname = parsed.hostname.toLowerCase();
+        const lowerPath = parsed.pathname.toLowerCase();
+
+        if (lowerPath.includes("/attachments/") || DISCORD_DOWNLOAD_HOSTS.has(hostname)) {
+            return true;
+        }
+
+        if (
+            parsed.searchParams.has("download") ||
+            parsed.searchParams.has("response-content-disposition") ||
+            getRelevantQueryFilename(parsed.searchParams).length > 0
+        ) {
+            return true;
+        }
+
+        return false;
+    } catch {
+        return false;
+    }
+}
 
 contextMenu({
     showSaveImageAs: true,
@@ -53,6 +308,10 @@ contextMenu({
     ],
 });
 function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
+    const openExternalWithReason = (url: string): void => {
+        void shell.openExternal(url);
+    };
+
     createTray();
     if (getWindowState("isMaximized") ?? false) {
         passedWindow.setSize(835, 600); //just so the whole thing doesn't cover whole screen
@@ -140,10 +399,26 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
                     alwaysOnTop: getConfig("popoutPiP"),
                 },
             };
-        if (url.startsWith("https:") || url.startsWith("http:") || url.startsWith("mailto:")) {
-            void shell.openExternal(url);
+        const isHttpOrHttps = isHttpUrl(url);
+        const shouldRouteWithGopeed = isHttpOrHttps && getCachedGopeedRouteDecision(url);
+        if (
+            isHttpOrHttps &&
+            isGopeedEnabled() &&
+            shouldRouteWithGopeed
+        ) {
+            void (async () => {
+                try {
+                    await queueGopeedDownload(passedWindow, url);
+                } catch {
+                    openExternalWithReason(url);
+                }
+            })();
+        } else if (isHttpOrHttps && isGopeedEnabled() && !shouldRouteWithGopeed) {
+            openExternalWithReason(url);
+        } else if (isHttpOrHttps || url.startsWith("mailto:")) {
+            openExternalWithReason(url);
         } else if (ignoreProtocolWarning) {
-            void shell.openExternal(url);
+            openExternalWithReason(url);
         } else {
             const options: MessageBoxOptions = {
                 type: "question",
@@ -166,7 +441,7 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
                     }
                 }
                 if (response === 0) {
-                    void shell.openExternal(url);
+                    openExternalWithReason(url);
                 }
             });
         }
@@ -174,7 +449,30 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
         return { action: "deny" };
     });
 
+    passedWindow.webContents.on("will-navigate", (event, url) => {
+        if (!isHttpUrl(url)) {
+            return;
+        }
+
+        if (!isGopeedEnabled()) {
+            return;
+        }
+
+        if (!getCachedGopeedRouteDecision(url)) {
+            return;
+        }
+        event.preventDefault();
+        void (async () => {
+            try {
+                await queueGopeedDownload(passedWindow, url);
+            } catch {
+                openExternalWithReason(url);
+            }
+        })();
+    });
+
     passedWindow.webContents.session.setSpellCheckerLanguages(getConfig("spellcheckLanguage"));
+    registerGopeedHandler(passedWindow.webContents.session);
 
     registerCustomHandler();
 
@@ -183,21 +481,28 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
         /https:\/\/sentry\.io\/.*/,
         /https:\/\/.*\.nel\.cloudflare\.com\/.*/,
     ];
+
     passedWindow.webContents.session.webRequest.onBeforeRequest((details, callback) => {
+        if (details.url.includes("ws://127.0.0.1:")) {
+            return callback({ cancel: true });
+        }
+
         if (blockedPatterns.some((pattern) => pattern.test(details.url))) {
             return callback({ cancel: true });
         }
+
         return callback({});
     });
 
-    // fix UMG video playback
-    passedWindow.webContents.session.webRequest.onBeforeSendHeaders(
-        { urls: ["https://www.youtube.com/embed/*"] },
-        ({ requestHeaders }, callback) => {
-            requestHeaders.Referer = "https://google.com";
-            callback({ requestHeaders });
-        },
-    );
+    passedWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+        if (details.url.startsWith("https://www.youtube.com/embed/")) {
+            details.requestHeaders.Referer = "https://google.com";
+        }
+
+        callback({ requestHeaders: details.requestHeaders });
+    });
+
+    // fix UMG video playback handled in unified onBeforeSendHeaders above
     if (getConfig("tray") === "dynamic") {
         passedWindow.webContents.on("page-favicon-updated", (_, favicons) => {
             try {
@@ -295,10 +600,6 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
             y: passedWindow.getPosition()[1],
         });
         setForceQuit(true);
-    });
-    passedWindow.webContents.session.webRequest.onBeforeRequest((details, callback) => {
-        if (details.url.includes("ws://127.0.0.1:")) return callback({ cancel: true });
-        return callback({});
     });
     passedWindow.on("focus", () => {
         void passedWindow.webContents.executeJavaScript(`document.body.removeAttribute("unFocused");`);
