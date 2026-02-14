@@ -1,0 +1,64 @@
+name: Release Binaries
+on:
+  release:
+    types: [published, created]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: windows-latest
+    env:
+      GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare PNPM
+        uses: pnpm/action-setup@v4
+
+      - name: Prepare Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm i
+
+      - name: Build TypeScript
+        run: pnpm build
+
+      - name: Load Electron cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache
+          key: electron-zips.windows-latest
+
+      - name: Build Electron for Windows (x64 only - NSIS, AppX, & ZIP)
+        run: pnpm electron-builder --x64 -w nsis appx zip
+
+      - name: Save Electron Cache
+        uses: actions/cache/save@v4
+        with:
+          path: .cache
+          key: electron-zips.windows-latest
+
+      - name: Collect release artifacts (x64 only, no debug files)
+        run: |
+          New-Item -ItemType Directory -Path release-artifacts -Force
+          Get-ChildItem -Path dist -Depth 0 -File | Where-Object { $_.Name -match '\.(exe|appx|zip)$' -and $_.Name -notmatch 'debug|arm64|ia32' } | Copy-Item -Destination release-artifacts/
+        shell: powershell
+
+      - name: Upload artifacts to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release-artifacts/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
