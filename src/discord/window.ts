@@ -4,6 +4,7 @@ import path from "node:path";
 import {
     BrowserWindow,
     type BrowserWindowConstructorOptions,
+    type DownloadItem,
     type MessageBoxOptions,
     app,
     dialog,
@@ -19,6 +20,7 @@ import { initQuickCss, injectThemesMain } from "../common/themes.js";
 import { getWindowState, setWindowState } from "../common/windowState.js";
 import { init } from "../main.js";
 import { registerGlobalKeybinds } from "./globalKeybinds.js";
+import { createGopeedTask } from "./gopeed.js";
 import { registerIpc } from "./ipc.js";
 import { setMenu } from "./menu.js";
 import { startRPC, stopRPC } from "./rpcProcess.js";
@@ -28,6 +30,60 @@ import { createTray, tray } from "./tray.js";
 import { registerVenmicIpc } from "./venmic.js";
 export let mainWindows: BrowserWindow[] = [];
 export let inviteWindow: BrowserWindow;
+let gopeedHandlerRegistered = false;
+const gopeedBypassUrls = new Set<string>();
+
+function getDownloadUrl(item: DownloadItem): string {
+    const chain = item.getURLChain();
+    return chain.at(-1) ?? item.getURL();
+}
+
+function registerGopeedHandler(passedWindow: BrowserWindow): void {
+    if (gopeedHandlerRegistered) {
+        return;
+    }
+
+    gopeedHandlerRegistered = true;
+    passedWindow.webContents.session.on("will-download", (event, item, webContents) => {
+        const sourceUrl = getDownloadUrl(item);
+        if (!sourceUrl) {
+            return;
+        }
+
+        if (gopeedBypassUrls.has(sourceUrl)) {
+            gopeedBypassUrls.delete(sourceUrl);
+            return;
+        }
+
+        const gopeed = getConfig("gopeed");
+        if (!gopeed.enabled) {
+            return;
+        }
+
+        const isHttpDownload = sourceUrl.toLowerCase().startsWith("http://");
+        const isHttpsDownload = sourceUrl.toLowerCase().startsWith("https://");
+        if (!isHttpDownload && !isHttpsDownload) {
+            return;
+        }
+
+        event.preventDefault();
+        item.cancel();
+
+        void createGopeedTask(sourceUrl, {
+            filename: item.getFilename(),
+        })
+            .then((taskId) => {
+                console.log(`[Gopeed] Queued download in Gopeed (task: ${taskId}) from ${sourceUrl}`);
+            })
+            .catch((error: unknown) => {
+                console.error("[Gopeed] Failed to queue download in Gopeed, falling back to built-in downloader:", error);
+                gopeedBypassUrls.add(sourceUrl);
+                if (!webContents.isDestroyed()) {
+                    webContents.downloadURL(sourceUrl);
+                }
+            });
+    });
+}
 
 contextMenu({
     showSaveImageAs: true,
@@ -175,6 +231,7 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
     });
 
     passedWindow.webContents.session.setSpellCheckerLanguages(getConfig("spellcheckLanguage"));
+    registerGopeedHandler(passedWindow);
 
     registerCustomHandler();
 

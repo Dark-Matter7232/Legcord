@@ -13,6 +13,13 @@ const {
 const settings = store.settings as Settings;
 
 export function SettingsPage() {
+    const updateGopeedConfig = (patch: Partial<Settings["gopeed"]>) => {
+        setConfig("gopeed", {
+            ...settings.gopeed,
+            ...patch,
+        });
+    };
+
     return (
         <>
             <Header class={classes.category} tag={HeaderTags.H5}>
@@ -229,6 +236,28 @@ export function SettingsPage() {
             >
                 {store.i18n["settings-spellcheck"]}
             </SwitchItem>
+            <Header class={classes.category} tag={HeaderTags.H5}>
+                {store.i18n["settings-category-downloader"]}
+            </Header>
+            <SwitchItem
+                note={store.i18n["settings-gopeed-desc"]}
+                value={settings.gopeed.enabled}
+                onChange={(enabled: boolean) => updateGopeedConfig({ enabled })}
+            >
+                {store.i18n["settings-gopeed"]}
+            </SwitchItem>
+            <TextBoxItem
+                title={store.i18n["settings-gopeed-host"]}
+                note={store.i18n["settings-gopeed-host-desc"]}
+                value={settings.gopeed.host}
+                onInput={(host: string) => updateGopeedConfig({ host })}
+            />
+            <TextBoxItem
+                title={store.i18n["settings-gopeed-token"]}
+                note={store.i18n["settings-gopeed-token-desc"]}
+                value={settings.gopeed.token}
+                onInput={(token: string) => updateGopeedConfig({ token })}
+            />
             <Header class={classes.category} tag={HeaderTags.H5}>
                 {store.i18n["settings-category-powerManagement"]}
             </Header>
