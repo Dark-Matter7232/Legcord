@@ -41,6 +41,11 @@ function isHttpUrl(url: string): boolean {
     return lowerUrl.startsWith("http://") || lowerUrl.startsWith("https://");
 }
 
+function isGopeedEnabled(): boolean {
+    const gopeed = getConfig("gopeed") as { enabled?: unknown } | undefined;
+    return gopeed?.enabled === true;
+}
+
 function getDownloadUrl(item: DownloadItem): string {
     const chain = item.getURLChain();
     return chain.at(-1) ?? item.getURL();
@@ -63,8 +68,7 @@ function registerGopeedHandler(passedWindow: BrowserWindow): void {
             return;
         }
 
-        const gopeed = getConfig("gopeed");
-        if (!gopeed.enabled) {
+        if (!isGopeedEnabled()) {
             return;
         }
 
@@ -229,7 +233,7 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
         const isHttpOrHttps = isHttpUrl(url);
         if (
             isHttpOrHttps &&
-            getConfig("gopeed").enabled &&
+            isGopeedEnabled() &&
             shouldRouteExternalUrlToGopeed(url)
         ) {
             void createGopeedTask(url)
@@ -272,6 +276,22 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
         }
 
         return { action: "deny" };
+    });
+
+    passedWindow.webContents.on("will-navigate", (event, url) => {
+        if (!isHttpUrl(url) || !isGopeedEnabled() || !shouldRouteExternalUrlToGopeed(url)) {
+            return;
+        }
+
+        event.preventDefault();
+        void createGopeedTask(url)
+            .then((taskId) => {
+                console.log(`[Gopeed] Queued same-window download link (task: ${taskId}) from ${url}`);
+            })
+            .catch((error: unknown) => {
+                console.error("[Gopeed] Failed to queue same-window download link, opening in browser:", error);
+                void shell.openExternal(url);
+            });
     });
 
     passedWindow.webContents.session.setSpellCheckerLanguages(getConfig("spellcheckLanguage"));

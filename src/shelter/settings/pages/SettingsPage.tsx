@@ -14,8 +14,13 @@ const settings = store.settings as Settings;
 
 export function SettingsPage() {
     const updateGopeedConfig = (patch: Partial<Settings["gopeed"]>) => {
+        const currentGopeed = (store.settings as Settings).gopeed ?? {
+            enabled: false,
+            host: "http://127.0.0.1:9999",
+            token: "",
+        };
         setConfig("gopeed", {
-            ...settings.gopeed,
+            ...currentGopeed,
             ...patch,
         });
     };
@@ -241,7 +246,7 @@ export function SettingsPage() {
             </Header>
             <SwitchItem
                 note={store.i18n["settings-gopeed-desc"]}
-                value={settings.gopeed.enabled}
+                value={Boolean((store.settings as Settings).gopeed?.enabled)}
                 onChange={(enabled: boolean) => updateGopeedConfig({ enabled })}
             >
                 {store.i18n["settings-gopeed"]}
@@ -249,13 +254,13 @@ export function SettingsPage() {
             <TextBoxItem
                 title={store.i18n["settings-gopeed-host"]}
                 note={store.i18n["settings-gopeed-host-desc"]}
-                value={settings.gopeed.host}
+                value={(store.settings as Settings).gopeed?.host ?? "http://127.0.0.1:9999"}
                 onInput={(host: string) => updateGopeedConfig({ host })}
             />
             <TextBoxItem
                 title={store.i18n["settings-gopeed-token"]}
                 note={store.i18n["settings-gopeed-token-desc"]}
-                value={settings.gopeed.token}
+                value={(store.settings as Settings).gopeed?.token ?? ""}
                 onInput={(token: string) => updateGopeedConfig({ token })}
             />
             <Header class={classes.category} tag={HeaderTags.H5}>
