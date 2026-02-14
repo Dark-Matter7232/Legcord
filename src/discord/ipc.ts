@@ -8,6 +8,7 @@ import type { Keybind } from "../@types/keybind.js";
 import type { Settings } from "../@types/settings.js";
 import type { ThemeManifest } from "../@types/themeManifest.js";
 import { getConfig, getConfigLocation, setConfig, setConfigBulk } from "../common/config.js";
+import { getAppliedFlags } from "../common/commandLineTracker.js";
 import { addDetectable, getDetectables, removeDetectable } from "../common/detectables.js";
 import { getLang, getLangName, getRawLang, setLang } from "../common/lang.js";
 import { installTheme, setThemeEnabled, uninstallTheme } from "../common/themes.js";
@@ -226,6 +227,19 @@ export function registerIpc(passedWindow: BrowserWindow): void {
     });
     ipcMain.on("isDev", (event) => {
         event.returnValue = isDev;
+    });
+    ipcMain.on("dumpFlags", (event) => {
+        const flags = getAppliedFlags();
+        console.log("===========================================");
+        console.log("   APPLIED CHROME COMMAND-LINE FLAGS");
+        console.log("===========================================");
+        console.log("Switches:", JSON.stringify(flags.switches, null, 2));
+        console.log("Enabled Features:", JSON.stringify([...new Set(flags.enableFeatures)], null, 2));
+        console.log("Disabled Features:", JSON.stringify([...new Set(flags.disableFeatures)], null, 2));
+        console.log("Enabled Blink Features:", JSON.stringify([...new Set(flags.enableBlinkFeatures)], null, 2));
+        console.log("Disabled Blink Features:", JSON.stringify([...new Set(flags.disableBlinkFeatures)], null, 2));
+        console.log("===========================================");
+        event.returnValue = flags;
     });
     ipcMain.on("setConfig", (_event, key: keyof Settings, value: string) => {
         setConfig(key, value);
