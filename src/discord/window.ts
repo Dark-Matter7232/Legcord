@@ -32,6 +32,14 @@ export let mainWindows: BrowserWindow[] = [];
 export let inviteWindow: BrowserWindow;
 let gopeedHandlerRegistered = false;
 const gopeedBypassUrls = new Set<string>();
+const DISCORD_DOWNLOAD_HOSTS = new Set(["cdn.discordapp.com", "cdn.discordapp.net", "media.discordapp.net"]);
+const DOWNLOAD_FILE_EXTENSION_RE =
+    /(\.zip|\.rar|\.7z|\.tar|\.gz|\.exe|\.msi|\.deb|\.rpm|\.dmg|\.pkg|\.apk|\.iso|\.pdf|\.mp3|\.mp4|\.mkv|\.mov|\.wav|\.flac|\.png|\.jpg|\.jpeg|\.gif|\.webp|\.txt|\.csv|\.json)$/i;
+
+function isHttpUrl(url: string): boolean {
+    const lowerUrl = url.toLowerCase();
+    return lowerUrl.startsWith("http://") || lowerUrl.startsWith("https://");
+}
 
 function getDownloadUrl(item: DownloadItem): string {
     const chain = item.getURLChain();
@@ -60,9 +68,7 @@ function registerGopeedHandler(passedWindow: BrowserWindow): void {
             return;
         }
 
-        const isHttpDownload = sourceUrl.toLowerCase().startsWith("http://");
-        const isHttpsDownload = sourceUrl.toLowerCase().startsWith("https://");
-        if (!isHttpDownload && !isHttpsDownload) {
+        if (!isHttpUrl(sourceUrl)) {
             return;
         }
 
@@ -85,33 +91,25 @@ function registerGopeedHandler(passedWindow: BrowserWindow): void {
     });
 }
 
-function isDiscordDownloadUrl(url: string): boolean {
-    const lowerUrl = url.toLowerCase();
-    return (
-        lowerUrl.includes("/attachments/") ||
-        lowerUrl.includes("cdn.discordapp.com") ||
-        lowerUrl.includes("cdn.discordapp.net") ||
-        lowerUrl.includes("media.discordapp.net")
-    );
-}
-
-function isLikelyDirectDownloadUrl(url: string): boolean {
+function shouldRouteExternalUrlToGopeed(url: string): boolean {
     try {
         const parsed = new URL(url);
+        const hostname = parsed.hostname.toLowerCase();
         const lowerPath = parsed.pathname.toLowerCase();
-        const lowerQuery = parsed.search.toLowerCase();
 
-        if (parsed.searchParams.has("download") || lowerQuery.includes("download=true")) {
+        if (lowerPath.includes("/attachments/") || DISCORD_DOWNLOAD_HOSTS.has(hostname)) {
             return true;
         }
 
-        if (parsed.searchParams.has("response-content-disposition") || parsed.searchParams.has("filename")) {
+        if (
+            parsed.searchParams.has("download") ||
+            parsed.searchParams.has("response-content-disposition") ||
+            parsed.searchParams.has("filename")
+        ) {
             return true;
         }
 
-        return /(\.zip|\.rar|\.7z|\.tar|\.gz|\.exe|\.msi|\.deb|\.rpm|\.dmg|\.pkg|\.apk|\.iso|\.pdf|\.mp3|\.mp4|\.mkv|\.mov|\.wav|\.flac|\.png|\.jpg|\.jpeg|\.gif|\.webp|\.txt|\.csv|\.json)$/i.test(
-            lowerPath,
-        );
+        return DOWNLOAD_FILE_EXTENSION_RE.test(lowerPath);
     } catch {
         return false;
     }
@@ -228,11 +226,11 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
                     alwaysOnTop: getConfig("popoutPiP"),
                 },
             };
-        const isHttpOrHttps = url.startsWith("https:") || url.startsWith("http:");
+        const isHttpOrHttps = isHttpUrl(url);
         if (
             isHttpOrHttps &&
             getConfig("gopeed").enabled &&
-            (isDiscordDownloadUrl(url) || isLikelyDirectDownloadUrl(url))
+            shouldRouteExternalUrlToGopeed(url)
         ) {
             void createGopeedTask(url)
                 .then((taskId) => {

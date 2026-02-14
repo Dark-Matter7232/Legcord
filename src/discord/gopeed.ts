@@ -22,25 +22,22 @@ function normalizeHost(host: unknown): string {
 }
 
 export async function createGopeedTask(url: string, options: CreateGopeedTaskOptions = {}) {
-    const gopeed = getConfig("gopeed");
-    const token = typeof gopeed.token === "string" ? gopeed.token.trim() : "";
-    const host = normalizeHost(gopeed.host);
+    const gopeed = getConfig("gopeed") as { host?: unknown; token?: unknown } | undefined;
+    const token = typeof gopeed?.token === "string" ? gopeed.token.trim() : "";
+    const host = normalizeHost(gopeed?.host);
     const requestUrl = `${host}/api/v1/tasks`;
 
     const payload: {
         req: { url: string };
         opts?: { name?: string };
-    } = {
-        req: {
-            url,
-        },
-    };
-
-    if (options.filename) {
-        payload.opts = {
-            ...(options.filename ? { name: options.filename } : {}),
-        };
-    }
+    } = options.filename
+        ? {
+              req: { url },
+              opts: { name: options.filename },
+          }
+        : {
+              req: { url },
+          };
 
     const response = await fetch(requestUrl, {
         method: "POST",
