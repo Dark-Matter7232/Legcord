@@ -1,5 +1,6 @@
 // Modules to control application life and create native browser window
 import { BrowserWindow, app, crashReporter, session, systemPreferences } from "electron";
+import isDev from "electron-is-dev";
 import "./discord/extensions/csp.js";
 import "./protocol.js";
 import { readFileSync } from "node:fs";
@@ -231,7 +232,7 @@ if (!app.requestSingleInstanceLock() && getConfig("multiInstance") === false) {
     }
 
     void app.whenReady().then(async () => {
-        dumpCmdLineFlags();
+        if (isDev) dumpCmdLineFlags();
         process.on("SIGINT", () => app.quit());
         process.on("SIGTERM", () => app.quit());
         // Patch for linux bug to ensure things are loaded before window creation (fixes transparency on some linux systems)

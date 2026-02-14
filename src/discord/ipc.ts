@@ -230,15 +230,7 @@ export function registerIpc(passedWindow: BrowserWindow): void {
     });
     ipcMain.on("dumpFlags", (event) => {
         const flags = getAppliedFlags();
-        console.log("===========================================");
-        console.log("   APPLIED CHROME COMMAND-LINE FLAGS");
-        console.log("===========================================");
-        console.log("Switches:", JSON.stringify(flags.switches, null, 2));
-        console.log("Enabled Features:", JSON.stringify([...new Set(flags.enableFeatures)], null, 2));
-        console.log("Disabled Features:", JSON.stringify([...new Set(flags.disableFeatures)], null, 2));
-        console.log("Enabled Blink Features:", JSON.stringify([...new Set(flags.enableBlinkFeatures)], null, 2));
-        console.log("Disabled Blink Features:", JSON.stringify([...new Set(flags.disableBlinkFeatures)], null, 2));
-        console.log("===========================================");
+        console.log(`=== Chrome Flags === ${JSON.stringify(flags)}`);
         event.returnValue = flags;
     });
     ipcMain.on("setConfig", (_event, key: keyof Settings, value: string) => {

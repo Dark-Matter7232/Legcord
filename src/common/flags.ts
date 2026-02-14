@@ -1,6 +1,7 @@
 import { powerMonitor } from "electron";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import isDev from "electron-is-dev";
 import { getConfig } from "./config.js";
 
 interface Preset {
@@ -8,6 +9,9 @@ interface Preset {
     enableFeatures: string[];
     disableFeatures: string[];
 }
+
+// Cache for custom flags to avoid repeated file reads
+let customFlagsCache: Preset | null = null;
 
 const performance: Preset = {
     switches: [
@@ -84,11 +88,16 @@ const vaapi: Preset = {
 };
 
 /**
- * Load custom flags from JSON file in AppData
+ * Load custom flags from JSON file in AppData (cached after first load)
  * Path: C:\Users\{username}\AppData\Roaming\legcord\flags.json
  * Returns an empty preset if file doesn't exist or is invalid
  */
 function loadCustomFlags(): Preset {
+    // Return cached result to avoid repeated disk reads
+    if (customFlagsCache !== null) {
+        return customFlagsCache;
+    }
+
     const customPreset: Preset = {
         switches: [],
         enableFeatures: [],
@@ -98,7 +107,8 @@ function loadCustomFlags(): Preset {
     try {
         const userDataPath = process.env.APPDATA;
         if (!userDataPath) {
-            console.log("APPDATA environment variable not found, skipping custom flags");
+            if (isDev) console.log("APPDATA environment variable not found, skipping custom flags");
+            customFlagsCache = customPreset;
             return customPreset;
         }
 
@@ -123,18 +133,19 @@ function loadCustomFlags(): Preset {
                 customPreset.disableFeatures = customFlags.disableFeatures;
             }
 
-            console.log(`Custom flags loaded from ${customFlagsPath}`);
+            if (isDev) console.log(`Custom flags loaded from ${customFlagsPath}`);
         } catch (fileError) {
             if ((fileError as NodeJS.ErrnoException).code === "ENOENT") {
-                console.log(`Custom flags file not found at ${customFlagsPath}`);
-            } else {
+                if (isDev) console.log(`Custom flags file not found at ${customFlagsPath}`);
+            } else if (isDev) {
                 console.error(`Error reading custom flags file: ${fileError}`);
             }
         }
     } catch (error) {
-        console.error(`Error loading custom flags: ${error}`);
+        if (isDev) console.error(`Error loading custom flags: ${error}`);
     }
 
+    customFlagsCache = customPreset;
     return customPreset;
 }
 
