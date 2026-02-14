@@ -15,6 +15,9 @@ jobs:
     runs-on: windows-latest
     env:
       GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+      ELECTRON_SKIP_SYSTEM_UPDATE: true
+      ELECTRON_GET_USE_CACHE: true
+      npm_config_loglevel: error
 
     steps:
       - name: Checkout code
@@ -29,10 +32,7 @@ jobs:
           node-version-file: package.json
           cache: pnpm
 
-      - name: Install dependencies
-        run: pnpm i
-
-      - name: Restore build cache
+      - name: Restore TypeScript build cache
         uses: actions/cache@v4
         with:
           path: |
@@ -43,19 +43,39 @@ jobs:
             ${{ runner.os }}-ts-build-dev-
             ${{ runner.os }}-ts-build-
 
+      - name: Restore Shelter plugins cache
+        uses: actions/cache@v4
+        with:
+          path: ts-out/plugins
+          key: ${{ runner.os }}-shelter-${{ github.ref_name }}-${{ hashFiles('src/shelter/**/*', 'pnpm-lock.yaml', 'tsconfig.json') }}
+          restore-keys: |
+            ${{ runner.os }}-shelter-dev-
+            ${{ runner.os }}-shelter-
+
+      - name: Restore Node modules cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies (frozen lockfile for validation)
+        run: pnpm i --frozen-lockfile
+
       - name: Build TypeScript
         run: pnpm build
 
-      - name: Setup electron-builder cache
+      - name: Setup build tool caches
         uses: actions/cache@v4
         with:
           path: |
             .cache
-            node_modules/.cache/electron-builder
-          key: ${{ runner.os }}-electron-${{ github.ref_name }}
+            node_modules/.cache
+          key: ${{ runner.os }}-build-cache-${{ github.ref_name }}
           restore-keys: |
-            ${{ runner.os }}-electron-dev
-            ${{ runner.os }}-electron-
+            ${{ runner.os }}-build-cache-dev
+            ${{ runner.os }}-build-cache-
 
       - name: Build Electron for Windows (x64 only - NSIS, AppX, & ZIP)
         run: pnpm electron-builder --x64 -w nsis appx zip
