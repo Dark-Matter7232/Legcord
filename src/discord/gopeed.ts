@@ -1,4 +1,5 @@
 import { getConfig } from "../common/config.js";
+import { logMain, logMainError } from "../common/mainLogger.js";
 
 interface GopeedApiResult<T> {
     code: number;
@@ -35,6 +36,11 @@ export async function createGopeedTask(url: string, options: CreateGopeedTaskOpt
     const token = typeof gopeed?.token === "string" ? gopeed.token.trim() : "";
     const host = normalizeHost(gopeed?.host);
     const requestUrl = `${host}/api/v1/tasks`;
+    const startedAt = Date.now();
+
+    logMain(
+        `[Gopeed][debug] createGopeedTask request: url=${url} filename=${options.filename ?? "<none>"} host=${host} tokenSet=${token.length > 0}`,
+    );
 
     const payload: {
         req: { url: string };
@@ -48,22 +54,39 @@ export async function createGopeedTask(url: string, options: CreateGopeedTaskOpt
               req: { url },
           };
 
-    const response = await fetch(requestUrl, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            ...(token ? { "X-Api-Token": token } : {}),
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(8_000),
-    });
+    let response: Response;
+    try {
+        response = await fetch(requestUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(token ? { "X-Api-Token": token } : {}),
+            },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(8_000),
+        });
+    } catch (error) {
+        logMainError(
+            `[Gopeed][debug] createGopeedTask network error after ${Date.now() - startedAt}ms for ${requestUrl}:`,
+            error,
+        );
+        throw error;
+    }
+
+    logMain(
+        `[Gopeed][debug] createGopeedTask HTTP response: status=${response.status} ok=${response.ok} elapsedMs=${Date.now() - startedAt}`,
+    );
 
     const bodyText = await response.text();
+    logMain(`[Gopeed][debug] createGopeedTask response body (first 300 chars): ${bodyText.slice(0, 300)}`);
     if (!response.ok) {
         throw new Error(`Gopeed API returned HTTP ${response.status}: ${bodyText.slice(0, 300)}`);
     }
 
     const json = parseGopeedApiResult(bodyText);
+    logMain(
+        `[Gopeed][debug] createGopeedTask parsed API result: code=${json.code} message=${json.msg ?? json.message ?? "<none>"} data=${json.data ?? "<none>"}`,
+    );
     if (json.code !== 0) {
         throw new Error(json.msg ?? json.message ?? "Unknown Gopeed API error");
     }

@@ -16,6 +16,7 @@ import { firstRun, getConfig, setConfig } from "../common/config.js";
 import { navigateTo } from "../common/dom.js";
 import { forceQuit, setForceQuit } from "../common/forceQuit.js";
 import { getLang } from "../common/lang.js";
+import { logMain, logMainError } from "../common/mainLogger.js";
 import { initQuickCss, injectThemesMain } from "../common/themes.js";
 import { getWindowState, setWindowState } from "../common/windowState.js";
 import { init } from "../main.js";
@@ -36,6 +37,11 @@ const DISCORD_DOWNLOAD_HOSTS = new Set(["cdn.discordapp.com", "cdn.discordapp.ne
 const DOWNLOAD_FILE_EXTENSION_RE =
     /(\.zip|\.rar|\.7z|\.tar|\.gz|\.exe|\.msi|\.deb|\.rpm|\.dmg|\.pkg|\.apk|\.iso|\.pdf|\.mp3|\.mp4|\.mkv|\.mov|\.wav|\.flac|\.png|\.jpg|\.jpeg|\.gif|\.webp|\.txt|\.csv|\.json)$/i;
 
+interface GopeedRouteDecision {
+    shouldRoute: boolean;
+    reason: string;
+}
+
 function isHttpUrl(url: string): boolean {
     const lowerUrl = url.toLowerCase();
     return lowerUrl.startsWith("http://") || lowerUrl.startsWith("https://");
@@ -52,31 +58,46 @@ function getDownloadUrl(item: DownloadItem): string {
 }
 
 function registerGopeedHandler(passedWindow: BrowserWindow): void {
+    const logGopeedDebug = (message: string): void => {
+        logMain(message);
+        if (!passedWindow.webContents.isDestroyed()) {
+            void passedWindow.webContents
+                .executeJavaScript(`console.log(${JSON.stringify(message)})`)
+                .catch(() => undefined);
+        }
+    };
+
     if (gopeedHandlerRegistered) {
+        logGopeedDebug("[Gopeed][debug] registerGopeedHandler skipped: already registered");
         return;
     }
 
     gopeedHandlerRegistered = true;
+    logGopeedDebug("[Gopeed][debug] registerGopeedHandler attached will-download listener");
     passedWindow.webContents.session.on("will-download", (event, item, webContents) => {
         const sourceUrl = getDownloadUrl(item);
         if (!sourceUrl) {
+            logGopeedDebug("[Gopeed][debug] will-download skipped: empty source URL");
             return;
         }
 
         if (gopeedBypassUrls.has(sourceUrl)) {
+            logGopeedDebug(`[Gopeed][debug] will-download bypassed once for fallback URL: ${sourceUrl}`);
             gopeedBypassUrls.delete(sourceUrl);
             return;
         }
 
         if (!isGopeedEnabled()) {
+            logGopeedDebug(`[Gopeed][debug] will-download skipped: Gopeed disabled (${sourceUrl})`);
             return;
         }
 
         if (!isHttpUrl(sourceUrl)) {
+            logGopeedDebug(`[Gopeed][debug] will-download skipped: non-http URL (${sourceUrl})`);
             return;
         }
 
-        console.log(`[Gopeed][debug] will-download intercepted: ${sourceUrl}`);
+        logGopeedDebug(`[Gopeed][debug] will-download intercepted: ${sourceUrl}`);
 
         event.preventDefault();
         item.cancel();
@@ -85,11 +106,12 @@ function registerGopeedHandler(passedWindow: BrowserWindow): void {
             filename: item.getFilename(),
         })
             .then((taskId) => {
-                console.log(`[Gopeed] Queued download in Gopeed (task: ${taskId}) from ${sourceUrl}`);
+                logGopeedDebug(`[Gopeed] Queued download in Gopeed (task: ${taskId}) from ${sourceUrl}`);
             })
             .catch((error: unknown) => {
-                console.error("[Gopeed] Failed to queue download in Gopeed, falling back to built-in downloader:", error);
+                logMainError("[Gopeed] Failed to queue download in Gopeed, falling back to built-in downloader:", error);
                 gopeedBypassUrls.add(sourceUrl);
+                logGopeedDebug(`[Gopeed][debug] will-download fallback: retrying built-in downloader for ${sourceUrl}`);
                 if (!webContents.isDestroyed()) {
                     webContents.downloadURL(sourceUrl);
                 }
@@ -97,14 +119,14 @@ function registerGopeedHandler(passedWindow: BrowserWindow): void {
     });
 }
 
-function shouldRouteExternalUrlToGopeed(url: string): boolean {
+function getGopeedRouteDecision(url: string): GopeedRouteDecision {
     try {
         const parsed = new URL(url);
         const hostname = parsed.hostname.toLowerCase();
         const lowerPath = parsed.pathname.toLowerCase();
 
         if (lowerPath.includes("/attachments/") || DISCORD_DOWNLOAD_HOSTS.has(hostname)) {
-            return true;
+            return { shouldRoute: true, reason: "discord-attachment-or-cdn-host" };
         }
 
         if (
@@ -112,12 +134,16 @@ function shouldRouteExternalUrlToGopeed(url: string): boolean {
             parsed.searchParams.has("response-content-disposition") ||
             parsed.searchParams.has("filename")
         ) {
-            return true;
+            return { shouldRoute: true, reason: "download-query-parameter" };
         }
 
-        return DOWNLOAD_FILE_EXTENSION_RE.test(lowerPath);
+        if (DOWNLOAD_FILE_EXTENSION_RE.test(lowerPath)) {
+            return { shouldRoute: true, reason: "download-like-file-extension" };
+        }
+
+        return { shouldRoute: false, reason: "no-download-pattern-match" };
     } catch {
-        return false;
+        return { shouldRoute: false, reason: "invalid-url" };
     }
 }
 
@@ -145,7 +171,22 @@ contextMenu({
     ],
 });
 function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
+    const logGopeedDebug = (message: string): void => {
+        logMain(message);
+        if (!passedWindow.webContents.isDestroyed()) {
+            void passedWindow.webContents
+                .executeJavaScript(`console.log(${JSON.stringify(message)})`)
+                .catch(() => undefined);
+        }
+    };
+
+    const openExternalWithReason = (url: string, reason: string): void => {
+        logGopeedDebug(`[Gopeed][debug] shell.openExternal (${reason}): ${url}`);
+        void shell.openExternal(url);
+    };
+
     createTray();
+    logGopeedDebug("[Gopeed][debug] doAfterDefiningTheWindow initialized");
     if (getWindowState("isMaximized") ?? false) {
         passedWindow.setSize(835, 600); //just so the whole thing doesn't cover whole screen
         passedWindow.maximize();
@@ -211,6 +252,7 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
         });
     });
     passedWindow.webContents.setWindowOpenHandler(({ url }) => {
+        logGopeedDebug(`[Gopeed][debug] setWindowOpenHandler invoked: ${url}`);
         // Allow about:blank (used by Vencord & Equicord QuickCss popup)
         if (url === "about:blank") return { action: "allow" };
         // Saving ics files on future events
@@ -233,24 +275,35 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
                 },
             };
         const isHttpOrHttps = isHttpUrl(url);
+        const routeDecision = isHttpOrHttps
+            ? getGopeedRouteDecision(url)
+            : { shouldRoute: false, reason: "non-http-url" };
         if (
             isHttpOrHttps &&
             isGopeedEnabled() &&
-            shouldRouteExternalUrlToGopeed(url)
+            routeDecision.shouldRoute
         ) {
-            console.log(`[Gopeed][debug] window-open routed to Gopeed: ${url}`);
+            logGopeedDebug(`[Gopeed][debug] window-open routed to Gopeed (${routeDecision.reason}): ${url}`);
             void createGopeedTask(url)
                 .then((taskId) => {
-                    console.log(`[Gopeed] Queued external download link (task: ${taskId}) from ${url}`);
+                    logGopeedDebug(`[Gopeed] Queued external download link (task: ${taskId}) from ${url}`);
                 })
                 .catch((error: unknown) => {
-                    console.error("[Gopeed] Failed to queue external download link, opening in browser:", error);
-                    void shell.openExternal(url);
+                    logMainError("[Gopeed] Failed to queue external download link, opening in browser:", error);
+                    openExternalWithReason(url, "window-open-gopeed-error");
                 });
+        } else if (isHttpOrHttps && isGopeedEnabled() && !routeDecision.shouldRoute) {
+            logGopeedDebug(
+                `[Gopeed][debug] window-open not routed to Gopeed (${routeDecision.reason}), opening externally: ${url}`,
+            );
         } else if (isHttpOrHttps || url.startsWith("mailto:")) {
-            void shell.openExternal(url);
+            if (isHttpOrHttps && !isGopeedEnabled()) {
+                logGopeedDebug(`[Gopeed][debug] window-open Gopeed disabled, opening externally: ${url}`);
+            }
+            openExternalWithReason(url, "window-open-http-or-mailto");
         } else if (ignoreProtocolWarning) {
-            void shell.openExternal(url);
+            logGopeedDebug(`[Gopeed][debug] window-open non-http protocol allowed by preference: ${url}`);
+            openExternalWithReason(url, "window-open-protocol-allowed");
         } else {
             const options: MessageBoxOptions = {
                 type: "question",
@@ -273,7 +326,7 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
                     }
                 }
                 if (response === 0) {
-                    void shell.openExternal(url);
+                    openExternalWithReason(url, "window-open-confirmed-by-user");
                 }
             });
         }
@@ -282,24 +335,56 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
     });
 
     passedWindow.webContents.on("will-navigate", (event, url) => {
-        if (!isHttpUrl(url) || !isGopeedEnabled() || !shouldRouteExternalUrlToGopeed(url)) {
+        logGopeedDebug(`[Gopeed][debug] will-navigate observed: ${url}`);
+        if (!isHttpUrl(url)) {
             return;
         }
 
-        console.log(`[Gopeed][debug] will-navigate routed to Gopeed: ${url}`);
+        if (!isGopeedEnabled()) {
+            logGopeedDebug(`[Gopeed][debug] will-navigate skipped: Gopeed disabled (${url})`);
+            return;
+        }
+
+        const routeDecision = getGopeedRouteDecision(url);
+        if (!routeDecision.shouldRoute) {
+            logGopeedDebug(`[Gopeed][debug] will-navigate not routed to Gopeed (${routeDecision.reason}): ${url}`);
+            return;
+        }
+
+        logGopeedDebug(`[Gopeed][debug] will-navigate routed to Gopeed (${routeDecision.reason}): ${url}`);
         event.preventDefault();
         void createGopeedTask(url)
             .then((taskId) => {
-                console.log(`[Gopeed] Queued same-window download link (task: ${taskId}) from ${url}`);
+                logGopeedDebug(`[Gopeed] Queued same-window download link (task: ${taskId}) from ${url}`);
             })
             .catch((error: unknown) => {
-                console.error("[Gopeed] Failed to queue same-window download link, opening in browser:", error);
-                void shell.openExternal(url);
+                logMainError("[Gopeed] Failed to queue same-window download link, opening in browser:", error);
+                openExternalWithReason(url, "will-navigate-gopeed-error");
             });
     });
 
     passedWindow.webContents.session.setSpellCheckerLanguages(getConfig("spellcheckLanguage"));
     registerGopeedHandler(passedWindow);
+
+    passedWindow.webContents.on("did-start-navigation", (_event, url, isInPlace, isMainFrame) => {
+        if (isMainFrame && isHttpUrl(url)) {
+            logGopeedDebug(`[Gopeed][debug] did-start-navigation: url=${url} inPlace=${String(isInPlace)}`);
+        }
+    });
+
+    passedWindow.webContents.on("did-redirect-navigation", (_event, url, isInPlace, isMainFrame) => {
+        if (isMainFrame && isHttpUrl(url)) {
+            logGopeedDebug(`[Gopeed][debug] did-redirect-navigation: url=${url} inPlace=${String(isInPlace)}`);
+        }
+    });
+
+    passedWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        if (isMainFrame && isHttpUrl(validatedURL)) {
+            logGopeedDebug(
+                `[Gopeed][debug] did-fail-load: url=${validatedURL} code=${String(errorCode)} description=${errorDescription}`,
+            );
+        }
+    });
 
     registerCustomHandler();
 
