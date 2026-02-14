@@ -18,7 +18,16 @@ function normalizeHost(host: unknown): string {
     }
 
     const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-    return withProtocol.replace(/\/+$/, "");
+    const withoutTrailingSlash = withProtocol.replace(/\/+$/, "");
+    return withoutTrailingSlash.replace(/\/api\/v1(?:\/tasks)?$/i, "");
+}
+
+function parseGopeedApiResult(bodyText: string): GopeedApiResult<string> {
+    try {
+        return JSON.parse(bodyText) as GopeedApiResult<string>;
+    } catch {
+        throw new Error(`Gopeed API returned non-JSON response: ${bodyText.slice(0, 300)}`);
+    }
 }
 
 export async function createGopeedTask(url: string, options: CreateGopeedTaskOptions = {}) {
@@ -49,11 +58,12 @@ export async function createGopeedTask(url: string, options: CreateGopeedTaskOpt
         signal: AbortSignal.timeout(8_000),
     });
 
+    const bodyText = await response.text();
     if (!response.ok) {
-        throw new Error(`Gopeed API returned HTTP ${response.status}`);
+        throw new Error(`Gopeed API returned HTTP ${response.status}: ${bodyText.slice(0, 300)}`);
     }
 
-    const json = (await response.json()) as GopeedApiResult<string>;
+    const json = parseGopeedApiResult(bodyText);
     if (json.code !== 0) {
         throw new Error(json.msg ?? json.message ?? "Unknown Gopeed API error");
     }

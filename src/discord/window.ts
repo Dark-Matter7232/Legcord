@@ -76,6 +76,8 @@ function registerGopeedHandler(passedWindow: BrowserWindow): void {
             return;
         }
 
+        console.log(`[Gopeed][debug] will-download intercepted: ${sourceUrl}`);
+
         event.preventDefault();
         item.cancel();
 
@@ -236,6 +238,7 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
             isGopeedEnabled() &&
             shouldRouteExternalUrlToGopeed(url)
         ) {
+            console.log(`[Gopeed][debug] window-open routed to Gopeed: ${url}`);
             void createGopeedTask(url)
                 .then((taskId) => {
                     console.log(`[Gopeed] Queued external download link (task: ${taskId}) from ${url}`);
@@ -283,6 +286,7 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
             return;
         }
 
+        console.log(`[Gopeed][debug] will-navigate routed to Gopeed: ${url}`);
         event.preventDefault();
         void createGopeedTask(url)
             .then((taskId) => {
