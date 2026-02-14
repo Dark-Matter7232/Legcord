@@ -85,6 +85,38 @@ function registerGopeedHandler(passedWindow: BrowserWindow): void {
     });
 }
 
+function isDiscordDownloadUrl(url: string): boolean {
+    const lowerUrl = url.toLowerCase();
+    return (
+        lowerUrl.includes("/attachments/") ||
+        lowerUrl.includes("cdn.discordapp.com") ||
+        lowerUrl.includes("cdn.discordapp.net") ||
+        lowerUrl.includes("media.discordapp.net")
+    );
+}
+
+function isLikelyDirectDownloadUrl(url: string): boolean {
+    try {
+        const parsed = new URL(url);
+        const lowerPath = parsed.pathname.toLowerCase();
+        const lowerQuery = parsed.search.toLowerCase();
+
+        if (parsed.searchParams.has("download") || lowerQuery.includes("download=true")) {
+            return true;
+        }
+
+        if (parsed.searchParams.has("response-content-disposition") || parsed.searchParams.has("filename")) {
+            return true;
+        }
+
+        return /(\.zip|\.rar|\.7z|\.tar|\.gz|\.exe|\.msi|\.deb|\.rpm|\.dmg|\.pkg|\.apk|\.iso|\.pdf|\.mp3|\.mp4|\.mkv|\.mov|\.wav|\.flac|\.png|\.jpg|\.jpeg|\.gif|\.webp|\.txt|\.csv|\.json)$/i.test(
+            lowerPath,
+        );
+    } catch {
+        return false;
+    }
+}
+
 contextMenu({
     showSaveImageAs: true,
     showCopyImageAddress: true,
@@ -196,7 +228,21 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
                     alwaysOnTop: getConfig("popoutPiP"),
                 },
             };
-        if (url.startsWith("https:") || url.startsWith("http:") || url.startsWith("mailto:")) {
+        const isHttpOrHttps = url.startsWith("https:") || url.startsWith("http:");
+        if (
+            isHttpOrHttps &&
+            getConfig("gopeed").enabled &&
+            (isDiscordDownloadUrl(url) || isLikelyDirectDownloadUrl(url))
+        ) {
+            void createGopeedTask(url)
+                .then((taskId) => {
+                    console.log(`[Gopeed] Queued external download link (task: ${taskId}) from ${url}`);
+                })
+                .catch((error: unknown) => {
+                    console.error("[Gopeed] Failed to queue external download link, opening in browser:", error);
+                    void shell.openExternal(url);
+                });
+        } else if (isHttpOrHttps || url.startsWith("mailto:")) {
             void shell.openExternal(url);
         } else if (ignoreProtocolWarning) {
             void shell.openExternal(url);
