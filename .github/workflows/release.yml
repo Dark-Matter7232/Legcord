@@ -35,25 +35,44 @@ jobs:
       - name: Build TypeScript
         run: pnpm build
 
-      - name: Load Electron cache
-        uses: actions/cache/restore@v4
+      - name: Setup electron-builder cache
+        uses: actions/cache@v4
         with:
-          path: .cache
-          key: electron-zips.windows-latest
+          path: |
+            .cache
+            node_modules/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ github.ref_name }}
+          restore-keys: |
+            ${{ runner.os }}-electron-dev
+            ${{ runner.os }}-electron-
 
       - name: Build Electron for Windows (x64 only - NSIS, AppX, & ZIP)
         run: pnpm electron-builder --x64 -w nsis appx zip
+        env:
+          ELECTRON_BUILDER_CACHE: .cache
+          CI: true
 
-      - name: Save Electron Cache
-        uses: actions/cache/save@v4
-        with:
-          path: .cache
-          key: electron-zips.windows-latest
+      - name: Verify artifacts exist
+        run: |
+          if ((Get-ChildItem -Path dist -File | Measure-Object).Count -eq 0) {
+            Write-Error "No build artifacts found in dist directory"
+            exit 1
+          }
+          Get-ChildItem -Path dist -File | ForEach-Object { Write-Host "Found: $($_.Name)" }
+        shell: powershell
 
       - name: Collect release artifacts (x64 only, no debug files)
         run: |
           New-Item -ItemType Directory -Path release-artifacts -Force
-          Get-ChildItem -Path dist -Depth 0 -File | Where-Object { $_.Name -match '\.(exe|appx|zip)$' -and $_.Name -notmatch 'debug|arm64|ia32' } | Copy-Item -Destination release-artifacts/
+          $sourceFiles = Get-ChildItem -Path dist -Depth 0 -File | Where-Object { $_.Name -match '\.(exe|appx|zip)$' -and $_.Name -notmatch 'debug|arm64|ia32' }
+          if ($sourceFiles.Count -eq 0) {
+            Write-Error "No x64 release artifacts found (expected .exe, .appx, or .zip)"
+            Get-ChildItem -Path dist -File | ForEach-Object { Write-Host "Available: $($_.Name)" }
+            exit 1
+          }
+          $sourceFiles | Copy-Item -Destination release-artifacts/
+          Write-Host "Collected $($sourceFiles.Count) artifact(s)"
+          Get-ChildItem -Path release-artifacts -File | ForEach-Object { Write-Host "Archived: $($_.Name)" }
         shell: powershell
 
       - name: Upload artifacts to release
