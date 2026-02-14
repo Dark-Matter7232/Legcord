@@ -34,10 +34,12 @@ function parseGopeedApiResult(bodyText: string): GopeedApiResult<string> {
 export async function createGopeedTask(url: string, options: CreateGopeedTaskOptions = {}) {
     const gopeed = getConfig("gopeed") as { host?: unknown; token?: unknown } | undefined;
     const token = typeof gopeed?.token === "string" ? gopeed.token.trim() : "";
+    const rawHost = typeof gopeed?.host === "string" ? gopeed.host : "<unset>";
     const host = normalizeHost(gopeed?.host);
     const requestUrl = `${host}/api/v1/tasks`;
     const startedAt = Date.now();
 
+    logMain(`[Gopeed][debug] createGopeedTask host normalization: rawHost=${rawHost} normalizedHost=${host}`);
     logMain(
         `[Gopeed][debug] createGopeedTask request: url=${url} filename=${options.filename ?? "<none>"} host=${host} tokenSet=${token.length > 0}`,
     );
@@ -54,6 +56,9 @@ export async function createGopeedTask(url: string, options: CreateGopeedTaskOpt
               req: { url },
           };
 
+    const payloadText = JSON.stringify(payload);
+    logMain(`[Gopeed][debug] createGopeedTask payload bytes=${String(payloadText.length)} payload=${payloadText}`);
+
     let response: Response;
     try {
         response = await fetch(requestUrl, {
@@ -62,7 +67,7 @@ export async function createGopeedTask(url: string, options: CreateGopeedTaskOpt
                 "Content-Type": "application/json",
                 ...(token ? { "X-Api-Token": token } : {}),
             },
-            body: JSON.stringify(payload),
+            body: payloadText,
             signal: AbortSignal.timeout(8_000),
         });
     } catch (error) {
@@ -90,6 +95,8 @@ export async function createGopeedTask(url: string, options: CreateGopeedTaskOpt
     if (json.code !== 0) {
         throw new Error(json.msg ?? json.message ?? "Unknown Gopeed API error");
     }
+
+    logMain(`[Gopeed][debug] createGopeedTask success: taskId=${json.data} elapsedMs=${Date.now() - startedAt}`);
 
     return json.data;
 }

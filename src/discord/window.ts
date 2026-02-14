@@ -57,6 +57,21 @@ function getDownloadUrl(item: DownloadItem): string {
     return chain.at(-1) ?? item.getURL();
 }
 
+function getGopeedDebugConfigSummary(): string {
+    const gopeed = getConfig("gopeed") as { enabled?: unknown; host?: unknown; token?: unknown } | undefined;
+    const host = typeof gopeed?.host === "string" ? gopeed.host : "<unset>";
+    const tokenSet = typeof gopeed?.token === "string" && gopeed.token.trim().length > 0;
+    return `enabled=${String(gopeed?.enabled === true)} host=${host} tokenSet=${String(tokenSet)}`;
+}
+
+function isLikelyDownloadTelemetryUrl(url: string): boolean {
+    if (!isHttpUrl(url)) {
+        return false;
+    }
+
+    return getGopeedRouteDecision(url).shouldRoute;
+}
+
 function registerGopeedHandler(passedWindow: BrowserWindow): void {
     const logGopeedDebug = (message: string): void => {
         logMain(message);
@@ -74,8 +89,13 @@ function registerGopeedHandler(passedWindow: BrowserWindow): void {
 
     gopeedHandlerRegistered = true;
     logGopeedDebug("[Gopeed][debug] registerGopeedHandler attached will-download listener");
+    logGopeedDebug(`[Gopeed][debug] registerGopeedHandler config snapshot: ${getGopeedDebugConfigSummary()}`);
     passedWindow.webContents.session.on("will-download", (event, item, webContents) => {
         const sourceUrl = getDownloadUrl(item);
+        const chain = item.getURLChain();
+        logGopeedDebug(
+            `[Gopeed][debug] will-download observed item: filename=${item.getFilename()} chainLength=${String(chain.length)} url=${sourceUrl}`,
+        );
         if (!sourceUrl) {
             logGopeedDebug("[Gopeed][debug] will-download skipped: empty source URL");
             return;
@@ -278,6 +298,11 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
         const routeDecision = isHttpOrHttps
             ? getGopeedRouteDecision(url)
             : { shouldRoute: false, reason: "non-http-url" };
+        if (isHttpOrHttps) {
+            logGopeedDebug(
+                `[Gopeed][debug] window-open decision: gopeedEnabled=${String(isGopeedEnabled())} shouldRoute=${String(routeDecision.shouldRoute)} reason=${routeDecision.reason} url=${url}`,
+            );
+        }
         if (
             isHttpOrHttps &&
             isGopeedEnabled() &&
@@ -296,6 +321,7 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
             logGopeedDebug(
                 `[Gopeed][debug] window-open not routed to Gopeed (${routeDecision.reason}), opening externally: ${url}`,
             );
+            openExternalWithReason(url, "window-open-not-classified-as-download");
         } else if (isHttpOrHttps || url.startsWith("mailto:")) {
             if (isHttpOrHttps && !isGopeedEnabled()) {
                 logGopeedDebug(`[Gopeed][debug] window-open Gopeed disabled, opening externally: ${url}`);
@@ -339,6 +365,8 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
         if (!isHttpUrl(url)) {
             return;
         }
+
+        logGopeedDebug(`[Gopeed][debug] will-navigate config snapshot: ${getGopeedDebugConfigSummary()}`);
 
         if (!isGopeedEnabled()) {
             logGopeedDebug(`[Gopeed][debug] will-navigate skipped: Gopeed disabled (${url})`);
@@ -393,6 +421,42 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
         /https:\/\/sentry\.io\/.*/,
         /https:\/\/.*\.nel\.cloudflare\.com\/.*/,
     ];
+
+    passedWindow.webContents.session.webRequest.onBeforeRequest((details, callback) => {
+        if (isLikelyDownloadTelemetryUrl(details.url)) {
+            logGopeedDebug(
+                `[Gopeed][debug] webRequest onBeforeRequest: method=${details.method} resourceType=${details.resourceType} url=${details.url}`,
+            );
+        }
+        return callback({});
+    });
+
+    passedWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+        if (isLikelyDownloadTelemetryUrl(details.url)) {
+            const hasReferer = typeof details.requestHeaders.Referer === "string" && details.requestHeaders.Referer.length > 0;
+            const hasUserAgent =
+                typeof details.requestHeaders["User-Agent"] === "string" && details.requestHeaders["User-Agent"].length > 0;
+            logGopeedDebug(
+                `[Gopeed][debug] webRequest onBeforeSendHeaders: hasReferer=${String(hasReferer)} hasUserAgent=${String(hasUserAgent)} url=${details.url}`,
+            );
+        }
+        callback({ requestHeaders: details.requestHeaders });
+    });
+
+    passedWindow.webContents.session.webRequest.onCompleted((details) => {
+        if (isLikelyDownloadTelemetryUrl(details.url)) {
+            logGopeedDebug(
+                `[Gopeed][debug] webRequest onCompleted: status=${String(details.statusCode)} fromCache=${String(details.fromCache)} method=${details.method} url=${details.url}`,
+            );
+        }
+    });
+
+    passedWindow.webContents.session.webRequest.onErrorOccurred((details) => {
+        if (isLikelyDownloadTelemetryUrl(details.url)) {
+            logGopeedDebug(`[Gopeed][debug] webRequest onErrorOccurred: error=${details.error} url=${details.url}`);
+        }
+    });
+
     passedWindow.webContents.session.webRequest.onBeforeRequest((details, callback) => {
         if (blockedPatterns.some((pattern) => pattern.test(details.url))) {
             return callback({ cancel: true });
