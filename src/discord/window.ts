@@ -29,7 +29,6 @@ import {
     normalizeGopeedHost,
     GopeedDownloadManager,
     IDMDownloadManager,
-    activateWindow,
     type DownloadManagerTaskOptions,
 } from "./downloadManager.js";
 import { registerIpc } from "./ipc.js";
@@ -86,15 +85,16 @@ function bringGopeedToFront(): void {
 }
 
 function bringIDMToFront(): void {
-    // Try common IDM window titles
-    const titles = [
-        "Internet Download Manager",
-        "IDM",
-        "idman",
-    ];
-
-    for (const title of titles) {
-        activateWindow(title);
+    const helperScript = join(app.getAppPath(), "scripts", "bring_idm_to_front.vbs");
+    // Fire and forget - don't wait for completion
+    try {
+        const process = spawn("cscript.exe", [helperScript], {
+            detached: true,
+            stdio: "ignore",
+        });
+        process.unref();
+    } catch {
+        // Silently fail if script cannot be executed
     }
 }
 

@@ -1,8 +1,11 @@
 import { getConfig } from "../common/config.js";
-import activex from "activex";
+import { Buffer } from "node:buffer";
+import { spawn, type ChildProcess } from "node:child_process";
+import { join } from "node:path";
+import { app } from "electron";
 
 // ============================================================================
-// Windows Utility Functions
+// Generic Download Manager Types and Interfaces
 // ============================================================================
 
 /**
@@ -10,11 +13,16 @@ import activex from "activex";
  * Replaces external activator package dependency
  */
 export function activateWindow(windowTitle: string): void {
+    const helperScript = join(app.getAppPath(), "scripts", "bring_idm_to_front.vbs");
+    // Fire and forget - don't wait for completion
     try {
-        const shell = activex("WScript.Shell");
-        shell.AppActivate(windowTitle);
+        const process = spawn("cscript.exe", [helperScript], {
+            detached: true,
+            stdio: "ignore",
+        });
+        process.unref();
     } catch {
-        // Silently fail if window not found or shell unavailable
+        // Silently fail if script cannot be executed
     }
 }
 
@@ -161,6 +169,12 @@ interface IDMTaskResult {
     message?: string;
 }
 
+function getIDMHelperScriptPath(): string {
+    // Get the VBScript helper path relative to app root
+    // This function is called at runtime, after app initialization
+    return join(app.getAppPath(), "scripts", "idm_helper.vbs");
+}
+
 export class IDMDownloadManager extends DownloadManager {
     constructor() {
         super("idm");
@@ -170,19 +184,18 @@ export class IDMDownloadManager extends DownloadManager {
         return true; // IDM is system-wide, always available if installed
     }
 
-    private executeIDMHelper(
+    private async executeIDMHelper(
         url: string,
         referrer: string,
         cookie: string,
         filename?: string
-    ): IDMTaskResult {
-        try {
-            // Create IDM COM object
-            const idm = activex("IDMan.CIDMLinkTransmitter");
+    ): Promise<IDMTaskResult> {
+        return new Promise((resolve, reject) => {
+            const helperScript = getIDMHelperScriptPath();
             
-            // Call SendLinkToIDM2 with parameters:
-            // URL, Referrer, Cookie, PostData, Username, Password, OutputPath, OutputFilename, Flags, reserved1, reserved2
-            idm.SendLinkToIDM2(
+            // VBScript expects: cscript.exe idm_helper.vbs url referrer cookie postData username password outputPath outputFilename userAgent flags
+            const args = [
+                helperScript,
                 url,
                 referrer,
                 cookie,
@@ -191,27 +204,65 @@ export class IDMDownloadManager extends DownloadManager {
                 "", // password (empty)
                 "", // output_path (empty - let IDM use default)
                 filename || "", // output_filename
-                1, // flags: 1 = silent download
-                null, // reserved1
-                null  // reserved2
-            );
-            
-            return {
-                success: true,
-                message: "Download task sent to IDM successfully"
-            };
+                "", // user_agent (empty)
+                "1", // flags: 1 = silent download
+            ];
+
+            // Use cscript.exe to execute the VBScript
+            const ps = spawn("cscript.exe", args, { stdio: ["pipe", "pipe", "pipe"] });
+            let output = "";
+            let errorOutput = "";
+
+            ps.stdout?.on("data", (data: Buffer) => {
+                output += data.toString();
+            });
+
+            ps.stderr?.on("data", (data: Buffer) => {
+                errorOutput += data.toString();
+            });
+
+            ps.on("close", (code: number | null) => {
+                try {
+                    // Parse the JSON response from VBScript
+                    const jsonMatch = output.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/);
+                    const jsonStr = jsonMatch ? jsonMatch[0] : output.trim();
+                    const result = JSON.parse(jsonStr) as IDMTaskResult;
+                    
+                    if (result.success) {
+                        resolve(result);
+                    } else {
+                        reject(new Error(result.error || "Unknown IDM error"));
+                    }
+                } catch (error) {
+                    reject(
+                        new Error(
+                            `Failed to execute IDM helper: ${errorOutput || output || `exit code ${code}`}`
+                        )
+                    );
+                }
+            });
+
+            ps.on("error", (err: Error) => {
+                reject(
+                    new Error(
+                        `Failed to execute IDM helper script: ${err.message}`
+                    )
+                );
+            });
+        });
+    }
+
+    async createTask(url: string, options: DownloadManagerTaskOptions = {}): Promise<string> {
+        try {
+            const referrer = options.headers?.Referer ?? "";
+            const cookieHeader = options.headers?.Cookie ?? "";
+
+            const result = await this.executeIDMHelper(url, referrer, cookieHeader, options.filename);
+            return result.message || "Download task sent to IDM successfully";
         } catch (error) {
             throw new Error(
                 `Failed to send download to IDM: ${error instanceof Error ? error.message : String(error)}`
             );
         }
-    }
-
-    async createTask(url: string, options: DownloadManagerTaskOptions = {}): Promise<string> {
-        const referrer = options.headers?.Referer ?? "";
-        const cookieHeader = options.headers?.Cookie ?? "";
-        
-        const result = this.executeIDMHelper(url, referrer, cookieHeader, options.filename);
-        return result.message || "Download task sent to IDM successfully";
     }
 }

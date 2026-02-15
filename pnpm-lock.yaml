@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      activex:
-        specifier: ^0.0.2
-        version: 0.0.2
       arrpc:
         specifier: https://github.com/Legcord/arrpc.git#0605ca72fda920919e4e75e80945512b9fb347f1
         version: https://codeload.github.com/Legcord/arrpc/tar.gz/0605ca72fda920919e4e75e80945512b9fb347f1
@@ -1131,10 +1128,6 @@ packages:
     resolution: {integrity: sha512-NZyJarBfL7nWwIq+FDL6Zp/yHEhePMNnnJ0y3qfieCrmNvYct8uvtiV41UvlSe6apAfk0fY1FbWx+NwfmpvtTg==}
     engines: {node: '>=0.4.0'}
     hasBin: true
-
-  activex@0.0.2:
-    resolution: {integrity: sha512-EtS8Y8fiAMJLLvypYiwBj2UBe5McV8CgRWpifCa8TScqRV41mgnB4OdkArAQT2iU3xZsyS8Je5dlA6yQB0GALw==}
-    os: [win32]
 
   agent-base@6.0.2:
     resolution: {integrity: sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==}
@@ -3989,8 +3982,6 @@ snapshots:
   abbrev@3.0.1: {}
 
   acorn@8.15.0: {}
-
-  activex@0.0.2: {}
 
   agent-base@6.0.2:
     dependencies:
