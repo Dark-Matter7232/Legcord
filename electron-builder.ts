@@ -60,10 +60,15 @@ export const config: Configuration = {
         "assets",
         "node-modules",
         "ts-out",
+        "scripts/*.vbs",
         "dist/venmic-arm64.node",
         "dist/venmic-x64.node",
         "package.json",
         "license.txt",
+    ],
+
+    asarUnpack: [
+        "scripts/**/*.vbs",
     ],
 
     electronDownload: {

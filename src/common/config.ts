@@ -61,6 +61,10 @@ const defaults: Settings = {
     autoScroll: false,
     useSystemCssEditor: false,
     extendedPluginAbilities: false,
+    gopeed: {
+        host: "http://127.0.0.1:9999",
+        token: "",
+    },
 };
 
 const safeMode: Settings = {
