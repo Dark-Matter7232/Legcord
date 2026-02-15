@@ -259,6 +259,15 @@ function registerDownloadManagerHandler(session: Session): void {
                 const manager = getActiveDownloadManager();
                 const queued = await queueDownloadToManager(targetWindow, sourceUrl, manager, item.getFilename());
                 if (!queued) {
+                    rememberBypassUrl(sourceUrl);
+                    if (!webContents.isDestroyed()) {
+                        try {
+                            await shell.openExternal(sourceUrl);
+                        } catch (error) {
+                            console.error("Failed to open default browser for download fallback:", error);
+                            webContents.downloadURL(sourceUrl);
+                        }
+                    }
                     return;
                 }
             } catch {
@@ -418,7 +427,10 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
             void (async () => {
                 try {
                     const manager = getActiveDownloadManager();
-                    await queueDownloadToManager(passedWindow, url, manager);
+                    const queued = await queueDownloadToManager(passedWindow, url, manager);
+                    if (!queued) {
+                        openExternalWithReason(url);
+                    }
                 } catch {
                     openExternalWithReason(url);
                 }
@@ -475,7 +487,10 @@ function doAfterDefiningTheWindow(passedWindow: BrowserWindow): void {
         void (async () => {
             try {
                 const manager = getActiveDownloadManager();
-                await queueDownloadToManager(passedWindow, url, manager);
+                const queued = await queueDownloadToManager(passedWindow, url, manager);
+                if (!queued) {
+                    openExternalWithReason(url);
+                }
             } catch {
                 openExternalWithReason(url);
             }
