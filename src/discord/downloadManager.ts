@@ -1,5 +1,5 @@
 import { getConfig } from "../common/config.js";
-import { ActiveXObject } from "node-ole";
+import activex from "activex";
 
 // ============================================================================
 // Windows Utility Functions
@@ -11,7 +11,7 @@ import { ActiveXObject } from "node-ole";
  */
 export function activateWindow(windowTitle: string): void {
     try {
-        const shell = new ActiveXObject("WScript.Shell");
+        const shell = activex("WScript.Shell");
         shell.AppActivate(windowTitle);
     } catch {
         // Silently fail if window not found or shell unavailable
@@ -178,7 +178,7 @@ export class IDMDownloadManager extends DownloadManager {
     ): IDMTaskResult {
         try {
             // Create IDM COM object
-            const idm = new ActiveXObject("IDMan.CIDMLinkTransmitter");
+            const idm = activex("IDMan.CIDMLinkTransmitter");
             
             // Call SendLinkToIDM2 with parameters:
             // URL, Referrer, Cookie, PostData, Username, Password, OutputPath, OutputFilename, Flags, reserved1, reserved2
