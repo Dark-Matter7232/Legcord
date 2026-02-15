@@ -2,9 +2,16 @@ name: Release Binaries
 
 on:
   push:
+    branches:
+      - download-managers
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to build from"
+        required: true
+        default: "download-managers"
 
 permissions:
   contents: write
@@ -19,7 +26,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: dev
+          ref: ${{ github.event.inputs.branch || 'download-managers' }}
 
       - name: Resolve release tag
         id: release_tag
