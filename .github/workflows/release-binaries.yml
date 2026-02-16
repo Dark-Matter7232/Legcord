@@ -3,7 +3,7 @@ name: Release Binaries
 on:
   push:
     branches:
-      - download-managers
+      - local
     tags:
       - "v*"
   workflow_dispatch:
@@ -11,7 +11,7 @@ on:
       branch:
         description: "Branch to build from"
         required: true
-        default: "download-managers"
+        default: "local"
 
 permissions:
   contents: write
