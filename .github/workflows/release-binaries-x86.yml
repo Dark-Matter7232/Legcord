@@ -1,0 +1,92 @@
+name: Release Binaries-x64
+
+on:
+  push:
+    branches:
+      - blur
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to build from"
+        required: true
+        default: "blur"
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows-x64:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || 'blur' }}
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+            $tag = "v$packageVersion-build.$env:GITHUB_RUN_NUMBER.$env:GITHUB_RUN_ATTEMPT"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+
+          $tag = $tag -replace '^refs/tags/', ''
+          $tag = $tag.TrimEnd('*')
+
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            Write-Error "Tag cannot be empty"
+            exit 1
+          }
+
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "release_name=Legcord $tag" >> $env:GITHUB_OUTPUT
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'electron-builder.ts') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build app
+        run: pnpm build
+
+      - name: Build Windows x64 binaries
+        run: pnpm electron-builder --x64 -w nsis zip
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: ${{ steps.release_tag.outputs.release_name }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            dist/*-x64.exe
+            dist/*-x64.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
